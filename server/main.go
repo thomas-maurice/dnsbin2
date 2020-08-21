@@ -29,8 +29,10 @@ var (
 	serverListen string
 	httpListen   string
 	dataDir      string
-	keysDir      string
-	filesDir     string
+
+	// these will be computed afterwards in the `main` func
+	keysDir  string
+	filesDir string
 )
 
 const (
@@ -175,10 +177,12 @@ func deleteFile(w http.ResponseWriter, r *http.Request) {
 		w.Write(result.JSON())
 		return
 	}
+
 	err = os.Remove(path.Join(filesDir, tkn.FileID))
 	if err != nil {
 		logrus.Warning("could not remove file " + tkn.FileID)
 	}
+
 	logrus.Info("deleting " + tkn.FileID)
 	result := deleteResponse{
 		Error:    false,
@@ -216,6 +220,7 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 		w.Write(result.JSON())
 		return
 	}
+
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		logrus.WithError(err).Error("could not retrieve the file")
@@ -228,6 +233,7 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+
 	fileID := uuid.NewV4()
 	fileBytes, err := ioutil.ReadAll(file)
 	if err != nil {
@@ -290,10 +296,12 @@ func main() {
 
 	http.HandleFunc("/upload", uploadFile)
 	http.HandleFunc("/delete", deleteFile)
+
 	go func() {
 		logrus.Info("you can upload a file doing something like curl -F 'file=@some-file.txt' http://localhost:8080/upload")
 		logrus.WithError(http.ListenAndServe(httpListen, nil)).Fatal("could not start http server")
 	}()
+
 	if _, err := os.Stat(filesDir); os.IsNotExist(err) {
 		logrus.Info("creating the files directory")
 		err := os.MkdirAll(filesDir, 0700)
@@ -301,6 +309,7 @@ func main() {
 			logrus.WithError(err).Fatal("could not create the data directory")
 		}
 	}
+
 	if _, err := os.Stat(keysDir); os.IsNotExist(err) {
 		logrus.Info("creating the keys directory")
 		err := os.MkdirAll(keysDir, 0700)
@@ -349,9 +358,11 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
+
 	if len(r.Question) != 1 {
 		return
 	}
+
 	q := r.Question[0]
 	switch q.Qtype {
 	case dns.TypeTXT:
@@ -374,9 +385,11 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				w.WriteMsg(m)
 				return
 			}
+
 			hash := sha1.New()
 			hash.Write(b)
 			h := hash.Sum(nil)
+
 			if err != nil {
 				logrus.WithError(err).Error("could not get hash")
 				m = new(dns.Msg)
@@ -384,12 +397,14 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				w.WriteMsg(m)
 				return
 			}
+
 			resp := new(dns.TXT)
 			resp.Hdr = dns.RR_Header{
 				Rrtype: q.Qtype,
 				Class:  dns.ClassINET,
 				Name:   q.Name,
 			}
+
 			resp.Txt = []string{hex.EncodeToString(h)}
 			m.Answer = []dns.RR{resp}
 			w.WriteMsg(m)
@@ -403,16 +418,19 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				w.WriteMsg(m)
 				return
 			}
+
 			blocks := (fileInfo.Size() / chunkSize)
 			if fileInfo.Size()%chunkSize != 0 {
 				blocks++
 			}
+
 			resp := new(dns.TXT)
 			resp.Hdr = dns.RR_Header{
 				Rrtype: q.Qtype,
 				Class:  dns.ClassINET,
 				Name:   q.Name,
 			}
+
 			resp.Txt = []string{fmt.Sprintf("%d", blocks)}
 			m.Answer = []dns.RR{resp}
 			w.WriteMsg(m)
@@ -426,6 +444,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				w.WriteMsg(m)
 				return
 			}
+
 			fileID := splitted[1]
 			file, err := os.Open(path.Join(filesDir, fileID))
 			if err != nil {
@@ -436,6 +455,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				return
 			}
 			defer file.Close()
+
 			buffer := make([]byte, chunkSize)
 			read, err := file.ReadAt(buffer, int64(chunkID)*chunkSize)
 			if read == 0 {
@@ -444,6 +464,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				w.WriteMsg(m)
 				return
 			}
+
 			if err != nil && err != io.EOF {
 				logrus.WithError(err).Error("could not read from file")
 				m = new(dns.Msg)
@@ -451,12 +472,14 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				w.WriteMsg(m)
 				return
 			}
+
 			resp := new(dns.TXT)
 			resp.Hdr = dns.RR_Header{
 				Rrtype: q.Qtype,
 				Class:  dns.ClassINET,
 				Name:   q.Name,
 			}
+
 			resp.Txt = []string{string(buffer[:read])}
 			m.Answer = []dns.RR{resp}
 		}
