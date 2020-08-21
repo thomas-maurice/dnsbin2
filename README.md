@@ -8,6 +8,7 @@ The main advantages are:
 * It is in Go, and not in Python, because Python is a trash language for trash people
 * I does not embed a f*cking BIND server inside the docker image
 * It can delete uploaded files (I don't know if the previous version was able to but tbh my eyes started bleeding when I read the code so we'll never know)
+* You can make the retrieving of the files concurrent, so it can be both utterly useless and very fast, just like the software equivalent of [sanic](https://knowyourmeme.com/memes/sanic-hegehog)
 
 In terms of features it is fairly simple, it allows you to:
 * Upload a file for storage using a simple cURL command
