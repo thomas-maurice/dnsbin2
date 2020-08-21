@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"strconv"
@@ -49,7 +51,6 @@ func main() {
 		panic(err)
 	}
 	var chunks int
-	// we use NXDOMAIN as EOF lol
 	if in.Rcode == dns.RcodeNameError {
 		logrus.Fatal("Could not get the number of chunks")
 	} else {
@@ -60,7 +61,29 @@ func main() {
 		}
 	}
 
-	logrus.Infof("will retrieve %d chunks using %d workers", chunks, workers)
+	m = new(dns.Msg)
+	m.Id = dns.Id()
+	m.RecursionDesired = true
+	m.Question = make([]dns.Question, 1)
+	id = fmt.Sprintf("hash.%s", fileId)
+	m.Question[0] = dns.Question{
+		Name:   id + "." + domain + ".",
+		Qtype:  dns.TypeTXT,
+		Qclass: dns.ClassINET,
+	}
+	in, _, err = c.Exchange(m, resolver)
+	if err != nil {
+		panic(err)
+	}
+	var hash string
+	if in.Rcode == dns.RcodeNameError {
+		logrus.Fatal("Could not get the hash")
+	} else {
+		txt := in.Answer[0].(*dns.TXT)
+		hash = txt.Txt[0]
+	}
+
+	logrus.Infof("will retrieve %d chunks using %d workers, SHA1:%s", chunks, workers, hash)
 	wg.Add(chunks)
 	workChan := make(chan int, workers)
 
@@ -104,6 +127,16 @@ func main() {
 	close(workChan)
 
 	data := strings.Join(chunkList, "")
+
+	sha := sha1.New()
+	sha.Write([]byte(data))
+	h := hex.EncodeToString(sha.Sum(nil))
+
+	if h != hash {
+		logrus.Fatalf("SHA1 do not match: %s != %s", h, hash)
+	} else {
+		logrus.Infof("Validated SHA1 %s", h)
+	}
 
 	decoded, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
