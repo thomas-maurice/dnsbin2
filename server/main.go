@@ -16,6 +16,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,9 @@ import (
 var (
 	serverListen string
 	httpListen   string
+	dataDir      string
+	keysDir      string
+	filesDir     string
 )
 
 const (
@@ -36,6 +40,7 @@ const (
 func init() {
 	flag.StringVar(&serverListen, "listen", ":53", "Listen address for the server")
 	flag.StringVar(&httpListen, "http-listen", ":8080", "Listen address for the http server")
+	flag.StringVar(&dataDir, "data-dir", "./data", "Directory in which to store the data")
 }
 
 type deleteToken struct {
@@ -95,7 +100,7 @@ func readSigningPubKey(path string) (crypto.PublicKey, error) {
 }
 
 func deleteFile(w http.ResponseWriter, r *http.Request) {
-	k, err := readSigningPubKey("data/keys/pub")
+	k, err := readSigningPubKey(path.Join(keysDir, "pub"))
 	if err != nil {
 		logrus.WithError(err).Error("could not read signing key")
 		result := deleteResponse{
@@ -170,7 +175,7 @@ func deleteFile(w http.ResponseWriter, r *http.Request) {
 		w.Write(result.JSON())
 		return
 	}
-	err = os.Remove("data/files/" + tkn.FileID)
+	err = os.Remove(path.Join(filesDir, tkn.FileID))
 	if err != nil {
 		logrus.Warning("could not remove file " + tkn.FileID)
 	}
@@ -187,7 +192,7 @@ func deleteFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func uploadFile(w http.ResponseWriter, r *http.Request) {
-	k, err := readSigningKey("data/keys/priv")
+	k, err := readSigningKey(path.Join(keysDir, "priv"))
 	if err != nil {
 		logrus.WithError(err).Error("could not read signing key")
 		result := uploadResponse{
@@ -237,7 +242,7 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 
 	encBytes := base64.StdEncoding.EncodeToString(fileBytes)
 
-	err = ioutil.WriteFile("data/files/"+fileID.String(), []byte(encBytes), 0600)
+	err = ioutil.WriteFile(path.Join(filesDir, fileID.String()), []byte(encBytes), 0600)
 	if err != nil {
 		logrus.WithError(err).Error("could not write the file")
 		result := uploadResponse{
@@ -279,28 +284,32 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	flag.Parse()
+
+	filesDir = path.Join(dataDir, "files")
+	keysDir = path.Join(dataDir, "keys")
+
 	http.HandleFunc("/upload", uploadFile)
 	http.HandleFunc("/delete", deleteFile)
 	go func() {
 		logrus.Info("you can upload a file doing something like curl -F 'file=@some-file.txt' http://localhost:8080/upload")
 		logrus.WithError(http.ListenAndServe(httpListen, nil)).Fatal("could not start http server")
 	}()
-	if _, err := os.Stat("./data/files"); os.IsNotExist(err) {
+	if _, err := os.Stat(filesDir); os.IsNotExist(err) {
 		logrus.Info("creating the files directory")
-		err := os.MkdirAll("./data/files", 0700)
+		err := os.MkdirAll(filesDir, 0700)
 		if err != nil {
 			logrus.WithError(err).Fatal("could not create the data directory")
 		}
 	}
-	if _, err := os.Stat("./data/keys"); os.IsNotExist(err) {
+	if _, err := os.Stat(keysDir); os.IsNotExist(err) {
 		logrus.Info("creating the keys directory")
-		err := os.MkdirAll("./data/keys", 0700)
+		err := os.MkdirAll(keysDir, 0700)
 		if err != nil {
 			logrus.WithError(err).Fatal("could not create the keys directory")
 		}
 	}
 
-	if _, err := os.Stat("./data/keys/priv"); os.IsNotExist(err) {
+	if _, err := os.Stat(path.Join(keysDir, "priv")); os.IsNotExist(err) {
 		logrus.Info("generating new ed25519 signing keys")
 		pub, priv, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
@@ -320,12 +329,12 @@ func main() {
 		encodedPriv := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
 		encodedPub := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubBytes})
 
-		err = ioutil.WriteFile("./data/keys/priv", encodedPriv, 0600)
+		err = ioutil.WriteFile(path.Join(keysDir, "priv"), encodedPriv, 0600)
 		if err != nil {
 			panic(err)
 		}
 
-		err = ioutil.WriteFile("./data/keys/pub", encodedPub, 0600)
+		err = ioutil.WriteFile(path.Join(keysDir, "pub"), encodedPub, 0600)
 		if err != nil {
 			panic(err)
 		}
@@ -357,7 +366,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 		switch splitted[0] {
 		case "hash":
-			b, err := ioutil.ReadFile("data/files/" + splitted[1])
+			b, err := ioutil.ReadFile(path.Join(filesDir, splitted[1]))
 			if err != nil {
 				logrus.WithError(err).Error("could not get hash")
 				m = new(dns.Msg)
@@ -386,7 +395,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			w.WriteMsg(m)
 			return
 		case "chunks":
-			fileInfo, err := os.Stat("data/files/" + splitted[1])
+			fileInfo, err := os.Stat(path.Join(filesDir, splitted[1]))
 			if err != nil {
 				logrus.WithError(err).Error("could not get fileInfo")
 				m = new(dns.Msg)
@@ -418,7 +427,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				return
 			}
 			fileID := splitted[1]
-			file, err := os.Open("data/files/" + fileID)
+			file, err := os.Open(path.Join(filesDir, fileID))
 			if err != nil {
 				logrus.WithError(err).Error("could not open file")
 				m = new(dns.Msg)
