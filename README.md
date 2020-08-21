@@ -163,5 +163,8 @@ sys     0m6.089s
 
 Yep, that's shit alright.
 
+**EDIT**: You can now make the cli retrieve the file chunks in a parallel way. With a concurency of 30 (`-workers 30`) it downloads
+the 5M of data in less than a second locally.
+
 # In conclusion
 Being able to do something does **NOT** mean that you should do it.
