@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"flag"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -348,49 +349,108 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		logrus.Info(q.Name)
 		splitted := strings.Split(q.Name, ".")
 		if len(splitted) < 2 {
-			return
-		}
-		chunkID, err := strconv.Atoi(splitted[0])
-		if err != nil {
-			logrus.WithError(err).Error("invalid chunk id")
 			m = new(dns.Msg)
 			m.SetRcode(r, dns.RcodeNameError)
 			w.WriteMsg(m)
 			return
 		}
-		fileID := splitted[1]
-		file, err := os.Open("data/files/" + fileID)
-		if err != nil {
-			logrus.WithError(err).Error("could not open file")
-			m = new(dns.Msg)
-			m.SetRcode(r, dns.RcodeNameError)
+
+		switch splitted[0] {
+		case "hash":
+			b, err := ioutil.ReadFile("data/files/" + splitted[1])
+			if err != nil {
+				logrus.WithError(err).Error("could not get hash")
+				m = new(dns.Msg)
+				m.SetRcode(r, dns.RcodeNameError)
+				w.WriteMsg(m)
+				return
+			}
+			hash := sha1.New()
+			hash.Write(b)
+			h := hash.Sum(nil)
+			if err != nil {
+				logrus.WithError(err).Error("could not get hash")
+				m = new(dns.Msg)
+				m.SetRcode(r, dns.RcodeNameError)
+				w.WriteMsg(m)
+				return
+			}
+			resp := new(dns.TXT)
+			resp.Hdr = dns.RR_Header{
+				Rrtype: q.Qtype,
+				Class:  dns.ClassINET,
+				Name:   q.Name,
+			}
+			resp.Txt = []string{hex.EncodeToString(h)}
+			m.Answer = []dns.RR{resp}
 			w.WriteMsg(m)
 			return
-		}
-		defer file.Close()
-		buffer := make([]byte, chunkSize)
-		read, err := file.ReadAt(buffer, int64(chunkID)*chunkSize)
-		if read == 0 {
-			m = new(dns.Msg)
-			m.SetRcode(r, dns.RcodeNameError)
+		case "chunks":
+			fileInfo, err := os.Stat("data/files/" + splitted[1])
+			if err != nil {
+				logrus.WithError(err).Error("could not get fileInfo")
+				m = new(dns.Msg)
+				m.SetRcode(r, dns.RcodeNameError)
+				w.WriteMsg(m)
+				return
+			}
+			blocks := (fileInfo.Size() / chunkSize)
+			if fileInfo.Size()%chunkSize != 0 {
+				blocks++
+			}
+			resp := new(dns.TXT)
+			resp.Hdr = dns.RR_Header{
+				Rrtype: q.Qtype,
+				Class:  dns.ClassINET,
+				Name:   q.Name,
+			}
+			resp.Txt = []string{fmt.Sprintf("%d", blocks)}
+			m.Answer = []dns.RR{resp}
 			w.WriteMsg(m)
 			return
+		default:
+			chunkID, err := strconv.Atoi(splitted[0])
+			if err != nil {
+				logrus.WithError(err).Error("invalid chunk id")
+				m = new(dns.Msg)
+				m.SetRcode(r, dns.RcodeNameError)
+				w.WriteMsg(m)
+				return
+			}
+			fileID := splitted[1]
+			file, err := os.Open("data/files/" + fileID)
+			if err != nil {
+				logrus.WithError(err).Error("could not open file")
+				m = new(dns.Msg)
+				m.SetRcode(r, dns.RcodeNameError)
+				w.WriteMsg(m)
+				return
+			}
+			defer file.Close()
+			buffer := make([]byte, chunkSize)
+			read, err := file.ReadAt(buffer, int64(chunkID)*chunkSize)
+			if read == 0 {
+				m = new(dns.Msg)
+				m.SetRcode(r, dns.RcodeNameError)
+				w.WriteMsg(m)
+				return
+			}
+			if err != nil && err != io.EOF {
+				logrus.WithError(err).Error("could not read from file")
+				m = new(dns.Msg)
+				m.SetRcode(r, dns.RcodeNameError)
+				w.WriteMsg(m)
+				return
+			}
+			resp := new(dns.TXT)
+			resp.Hdr = dns.RR_Header{
+				Rrtype: q.Qtype,
+				Class:  dns.ClassINET,
+				Name:   q.Name,
+			}
+			resp.Txt = []string{string(buffer[:read])}
+			m.Answer = []dns.RR{resp}
 		}
-		if err != nil && err != io.EOF {
-			logrus.WithError(err).Error("could not read from file")
-			m = new(dns.Msg)
-			m.SetRcode(r, dns.RcodeNameError)
-			w.WriteMsg(m)
-			return
-		}
-		resp := new(dns.TXT)
-		resp.Hdr = dns.RR_Header{
-			Rrtype: q.Qtype,
-			Class:  dns.ClassINET,
-			Name:   q.Name,
-		}
-		resp.Txt = []string{string(buffer[:read])}
-		m.Answer = []dns.RR{resp}
 	default:
 		m = new(dns.Msg)
 		m.SetRcode(r, dns.RcodeNameError)

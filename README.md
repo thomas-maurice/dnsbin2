@@ -115,6 +115,15 @@ To manage to retrieve the file entirely the cli will retrieve small chunks of 25
 
 Then concatenate all that and base64-decode it and bam you have your original file.
 
+# Getting file infos
+You can query the special `chunks` and `hash` subdomains to fetch the SHA1 of the file and the number of chunks that will be required to download it.
+```bash
+$ dig @127.0.0.1 -p 5354 chunks.04927d90-1c30-4e15-bdde-6b714ea1326c.foo.com. TXT +short
+"27522"
+$ dig @127.0.0.1 -p 5354 hash.04927d90-1c30-4e15-bdde-6b714ea1326c.foo.com. TXT +short
+"b27c33435ebf8313104fe6fdf757ef0a56a2a5c5"
+```
+
 # How about the performance
 I'm so glad you asked. Let us demonstrate with a simple 5Mb file.
 
