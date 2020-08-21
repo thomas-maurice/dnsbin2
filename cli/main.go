@@ -86,7 +86,6 @@ func main() {
 
 				// we use NXDOMAIN as EOF lol
 				if in.Rcode == dns.RcodeNameError {
-					wg.Done()
 					break
 				} else {
 					txt := in.Answer[0].(*dns.TXT)
