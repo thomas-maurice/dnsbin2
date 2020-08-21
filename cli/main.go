@@ -33,6 +33,12 @@ func main() {
 	if fileId == "" {
 		logrus.Fatal("You should pass in an UUID to retrieve")
 	}
+
+	// Anti idiot protection
+	if workers <= 0 {
+		workers = 1
+	}
+
 	c := new(dns.Client)
 	wg := sync.WaitGroup{}
 
