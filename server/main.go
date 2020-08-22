@@ -21,7 +21,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/miekg/dns"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	uuid "github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
 )
@@ -38,7 +41,23 @@ var (
 )
 
 const (
-	chunkSize = 254
+	chunkSize     = 254
+	failedLabel   = "FAILED"
+	successLabel  = "SUCCESS"
+	promNamespace = "dnsbin2"
+)
+
+// prometheus metrics
+var (
+	dnsRequestCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: promNamespace,
+			Name:      "dns_requests",
+		},
+		[]string{
+			"status",
+		},
+	)
 )
 
 func init() {
@@ -46,6 +65,10 @@ func init() {
 	flag.StringVar(&httpListen, "http-listen", ":8080", "Listen address for the http server")
 	flag.StringVar(&dataDir, "data-dir", "./data", "Directory in which to store the data")
 	flag.BoolVar(&debug, "debug", false, "Debug mode")
+
+	prometheus.MustRegister(
+		dnsRequestCounter,
+	)
 }
 
 type deleteToken struct {
@@ -302,6 +325,7 @@ func main() {
 
 	http.HandleFunc("/upload", uploadFile)
 	http.HandleFunc("/delete", deleteFile)
+	http.Handle("/metrics", promhttp.Handler())
 
 	go func() {
 		logrus.Info("you can upload a file doing something like curl -F 'file=@some-file.txt' http://localhost:8080/upload")
@@ -383,8 +407,12 @@ func handleRequestWrapper(w dns.ResponseWriter, r *dns.Msg) {
 		m := new(dns.Msg)
 		m.SetRcode(r, dns.RcodeNameError)
 		w.WriteMsg(m)
+		dnsRequestCounter.WithLabelValues(failedLabel).Inc()
 		return
 	}
+
+	dnsRequestCounter.WithLabelValues(successLabel).Inc()
+
 	if resp == nil {
 		m := new(dns.Msg)
 		m.SetRcode(r, dns.RcodeNameError)
