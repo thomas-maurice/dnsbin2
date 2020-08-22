@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ var (
 	serverListen string
 	httpListen   string
 	dataDir      string
+	debug        bool
 
 	// these will be computed afterwards in the `main` func
 	keysDir  string
@@ -43,6 +45,7 @@ func init() {
 	flag.StringVar(&serverListen, "listen", ":53", "Listen address for the server")
 	flag.StringVar(&httpListen, "http-listen", ":8080", "Listen address for the http server")
 	flag.StringVar(&dataDir, "data-dir", "./data", "Directory in which to store the data")
+	flag.BoolVar(&debug, "debug", false, "Debug mode")
 }
 
 type deleteToken struct {
@@ -293,6 +296,9 @@ func main() {
 
 	filesDir = path.Join(dataDir, "files")
 	keysDir = path.Join(dataDir, "keys")
+	if debug {
+		logrus.SetLevel(logrus.DebugLevel)
+	}
 
 	http.HandleFunc("/upload", uploadFile)
 	http.HandleFunc("/delete", deleteFile)
@@ -350,40 +356,81 @@ func main() {
 	}
 
 	server := &dns.Server{Addr: serverListen, Net: "udp"}
-	dns.HandleFunc(".", handleRequest)
+	dns.HandleFunc(".", handleRequestWrapper)
 	logrus.WithError(server.ListenAndServe()).Fatal("error while running the server")
 }
 
-func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+func handleRequestWrapper(w dns.ResponseWriter, r *dns.Msg) {
+	resp, err := handleRequest(w, r)
+
+	question := "?"
+	class := "?"
+	qType := "?"
+	if len(r.Question) != 0 {
+		question = r.Question[0].Name
+		class = dns.Class(r.Question[0].Qclass).String()
+		qType = dns.Type(r.Question[0].Qtype).String()
+	}
+
+	if err != nil {
+		logrus.WithError(err).WithFields(
+			logrus.Fields{
+				"question": question,
+				"class":    class,
+				"type":     qType,
+			},
+		).Error("could not handle request")
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeNameError)
+		w.WriteMsg(m)
+		return
+	}
+	if resp == nil {
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeNameError)
+		w.WriteMsg(m)
+		logrus.WithFields(
+			logrus.Fields{
+				"question": question,
+				"class":    class,
+				"type":     qType,
+			},
+		).Debug("answered with NXDOMAIN")
+		return
+	}
+
+	logrus.WithFields(
+		logrus.Fields{
+			"question": question,
+			"class":    class,
+			"type":     qType,
+		},
+	).Debug("handled request")
+	w.WriteMsg(resp)
+}
+
+func handleRequest(w dns.ResponseWriter, r *dns.Msg) (*dns.Msg, error) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
 
 	if len(r.Question) != 1 {
-		return
+		return nil, errors.New("malformed question")
 	}
 
 	q := r.Question[0]
 	switch q.Qtype {
 	case dns.TypeTXT:
-		logrus.Info(q.Name)
 		splitted := strings.Split(q.Name, ".")
 		if len(splitted) < 2 {
-			m = new(dns.Msg)
-			m.SetRcode(r, dns.RcodeNameError)
-			w.WriteMsg(m)
-			return
+			return nil, errors.New("invalid request, less than two parts")
 		}
 
 		switch splitted[0] {
 		case "hash":
 			b, err := ioutil.ReadFile(path.Join(filesDir, splitted[1]))
 			if err != nil {
-				logrus.WithError(err).Error("could not get hash")
-				m = new(dns.Msg)
-				m.SetRcode(r, dns.RcodeNameError)
-				w.WriteMsg(m)
-				return
+				return nil, err
 			}
 
 			hash := sha1.New()
@@ -391,11 +438,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			h := hash.Sum(nil)
 
 			if err != nil {
-				logrus.WithError(err).Error("could not get hash")
-				m = new(dns.Msg)
-				m.SetRcode(r, dns.RcodeNameError)
-				w.WriteMsg(m)
-				return
+				return nil, err
 			}
 
 			resp := new(dns.TXT)
@@ -407,16 +450,11 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 			resp.Txt = []string{hex.EncodeToString(h)}
 			m.Answer = []dns.RR{resp}
-			w.WriteMsg(m)
-			return
+			return m, nil
 		case "chunks":
 			fileInfo, err := os.Stat(path.Join(filesDir, splitted[1]))
 			if err != nil {
-				logrus.WithError(err).Error("could not get fileInfo")
-				m = new(dns.Msg)
-				m.SetRcode(r, dns.RcodeNameError)
-				w.WriteMsg(m)
-				return
+				return nil, err
 			}
 
 			blocks := (fileInfo.Size() / chunkSize)
@@ -433,44 +471,28 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 			resp.Txt = []string{fmt.Sprintf("%d", blocks)}
 			m.Answer = []dns.RR{resp}
-			w.WriteMsg(m)
-			return
+			return m, nil
 		default:
 			chunkID, err := strconv.Atoi(splitted[0])
 			if err != nil {
-				logrus.WithError(err).Error("invalid chunk id")
-				m = new(dns.Msg)
-				m.SetRcode(r, dns.RcodeNameError)
-				w.WriteMsg(m)
-				return
+				return nil, err
 			}
 
 			fileID := splitted[1]
 			file, err := os.Open(path.Join(filesDir, fileID))
 			if err != nil {
-				logrus.WithError(err).Error("could not open file")
-				m = new(dns.Msg)
-				m.SetRcode(r, dns.RcodeNameError)
-				w.WriteMsg(m)
-				return
+				return nil, err
 			}
 			defer file.Close()
 
 			buffer := make([]byte, chunkSize)
 			read, err := file.ReadAt(buffer, int64(chunkID)*chunkSize)
 			if read == 0 {
-				m = new(dns.Msg)
-				m.SetRcode(r, dns.RcodeNameError)
-				w.WriteMsg(m)
-				return
+				return nil, err
 			}
 
 			if err != nil && err != io.EOF {
-				logrus.WithError(err).Error("could not read from file")
-				m = new(dns.Msg)
-				m.SetRcode(r, dns.RcodeNameError)
-				w.WriteMsg(m)
-				return
+				return nil, nil
 			}
 
 			resp := new(dns.TXT)
@@ -487,5 +509,5 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		m = new(dns.Msg)
 		m.SetRcode(r, dns.RcodeNameError)
 	}
-	w.WriteMsg(m)
+	return m, nil
 }
