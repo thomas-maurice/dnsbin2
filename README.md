@@ -5,7 +5,6 @@
 This is a (slightly) improved re-implementation of my already embarassingly stupid and useless [dnsbin](https://github.com/thomas-maurice/dnsbin) written in Go.
 
 The main advantages are:
-* It is in Go, and not in Python, because Python is a trash language for trash people
 * I does not embed a f*cking BIND server inside the docker image
 * It can delete uploaded files (I don't know if the previous version was able to but tbh my eyes started bleeding when I read the code so we'll never know)
 * You can make the retrieving of the files concurrent, so it can be both utterly useless and very fast, just like the software equivalent of [sanic](https://knowyourmeme.com/memes/sanic-hegehog)
@@ -39,10 +38,10 @@ go build -v -o ./bin/cli ./cli
 ## Run the server
 ```
 $ ./bin/server -listen :5354
-INFO[0000] creating the files directory                 
-INFO[0000] you can upload a file doing something like curl -F 'file=@some-file.txt' http://localhost:8080/upload 
-INFO[0000] creating the keys directory                  
-INFO[0000] generating new ed25519 signing keys 
+INFO[0000] creating the files directory
+INFO[0000] you can upload a file doing something like curl -F 'file=@some-file.txt' http://localhost:8080/upload
+INFO[0000] creating the keys directory
+INFO[0000] generating new ed25519 signing keys
 ```
 
 All the data will live in a new `./data` directory.
